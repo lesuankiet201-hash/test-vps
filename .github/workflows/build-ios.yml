@@ -73,8 +73,10 @@ jobs:
 
       - name: Compile iPhone ARM64 app
         run: |
+          set -euo pipefail
           mkdir -p build/DerivedData
-          chmod -R u+rwX .
+          chmod -R u+rwx .
+          chmod -R +x Il2CppOutputProject/IL2CPP/build 2>/dev/null || true
           if [ "${{ steps.setup_cert.outputs.has_cert }}" = "true" ]; then
             echo "Compiling with Code Signing..."
             xcodebuild build \
@@ -84,7 +86,7 @@ jobs:
               -destination 'generic/platform=iOS' \
               -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
               -jobs 3 \
-              COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee build/xcodebuild.log
+              COMPILER_INDEX_STORE_ENABLE=NO
           else
             echo "Compiling Unsigned..."
             xcodebuild build \
@@ -97,7 +99,7 @@ jobs:
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY="" \
-              COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee build/xcodebuild.log
+              COMPILER_INDEX_STORE_ENABLE=NO
           fi
 
       - name: Validate and package IPA
