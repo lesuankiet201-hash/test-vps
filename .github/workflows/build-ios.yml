@@ -9,14 +9,13 @@ on:
         required: false
         default: true
       release_tag:
-        description: 'Tag cho GitHub Release (để trống nếu không muốn tạo release)'
+        description: 'Tag cho GitHub Release'
         type: string
         required: false
-        default: 'v1.0'
+        default: 'v1.0-berry'
   push:
     branches:
       - main
-      - master
 
 permissions:
   contents: write
@@ -73,67 +72,70 @@ jobs:
             echo "Mode: Unsigned Build (No certificate or skip_signing is true)"
           fi
 
-      - name: Build Xcode Archive
+      - name: Compile iPhone ARM64 app
         run: |
+          mkdir -p build/DerivedData
+          chmod -R u+rwX .
           if [ "${{ steps.setup_cert.outputs.has_cert }}" = "true" ]; then
-            echo "Building with Code Signing..."
-            xcodebuild clean archive \
+            echo "Compiling with Code Signing..."
+            xcodebuild build \
               -project Unity-iPhone.xcodeproj \
               -scheme Unity-iPhone \
               -configuration Release \
-              -sdk iphoneos \
-              -archivePath build/Unity-iPhone.xcarchive
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
+              -jobs 3 \
+              COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee build/xcodebuild.log
           else
-            echo "Building Unsigned Archive..."
-            xcodebuild clean archive \
+            echo "Compiling Unsigned..."
+            xcodebuild build \
               -project Unity-iPhone.xcodeproj \
               -scheme Unity-iPhone \
               -configuration Release \
-              -sdk iphoneos \
-              -archivePath build/Unity-iPhone.xcarchive \
-              CODE_SIGN_STYLE=Manual \
-              CODE_SIGN_IDENTITY="" \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
+              -jobs 3 \
+              CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGN_IDENTITY="" \
+              COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee build/xcodebuild.log
           fi
 
-      - name: Package IPA
+      - name: Validate and package IPA
         run: |
-          mkdir -p output Payload
-          APP_PATH="build/Unity-iPhone.xcarchive/Products/Applications/Unity-iPhone.app"
-          
-          if [ ! -d "$APP_PATH" ]; then
-            echo "Error: Unity-iPhone.app not found at $APP_PATH"
+          set -euo pipefail
+          APP_PATH=$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -type d -print -quit)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: Không tìm thấy file .app sau khi build!"
             exit 1
           fi
-
-          echo "Copying application to Payload..."
-          cp -R "$APP_PATH" Payload/
-
-          echo "Packaging IPA..."
-          zip -r -y output/NRO_Berry_iOS.ipa Payload
-
-          echo "IPA Size:"
-          ls -lh output/NRO_Berry_iOS.ipa
+          echo "Tìm thấy .app: $APP_PATH"
+          
+          mkdir -p build/Payload output
+          ditto "$APP_PATH" "build/Payload/$(basename "$APP_PATH")"
+          (cd build && zip -qry "$GITHUB_WORKSPACE/output/NRO-Berry-iOS.ipa" Payload)
+          
+          echo "Kích thước IPA:"
+          ls -lh output/NRO-Berry-iOS.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: NRO_Berry_iOS_IPA
-          path: output/NRO_Berry_iOS.ipa
+          path: output/NRO-Berry-iOS.ipa
           retention-days: 14
 
-      - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+      - name: Create / Update GitHub Release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          files: output/NRO_Berry_iOS.ipa
-          tag_name: ${{ github.event.inputs.release_tag || 'v1.0' }}
-          name: "NRO Berry iOS IPA (${{ github.event.inputs.release_tag || 'v1.0' }})"
+          files: output/NRO-Berry-iOS.ipa
+          tag_name: ${{ github.event.inputs.release_tag || 'v1.0-berry' }}
+          name: "NRO Berry iOS IPA (${{ github.event.inputs.release_tag || 'v1.0-berry' }})"
           body: |
             ## NRO Berry iOS IPA Release
             - Build tự động từ GitHub Actions
-            - File IPA hỗ trợ cài đặt qua: **TrollStore, Scarlet, Sideloadly, AltStore, ESign**
+            - Cài đặt hỗ trợ: **TrollStore, Scarlet, Sideloadly, AltStore, ESign**
           draft: false
           prerelease: false
         env:
