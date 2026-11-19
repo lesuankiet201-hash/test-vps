@@ -1,0 +1,10 @@
+# Build & temporary files
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+.DS_Store
+*.ipa
+Payload/
+output/

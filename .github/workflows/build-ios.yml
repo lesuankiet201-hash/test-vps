@@ -1,0 +1,140 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_signing:
+        description: 'Bỏ qua signing (Unsigned IPA cho TrollStore / Sideloadly / Scarlet / ESign)'
+        type: boolean
+        required: false
+        default: true
+      release_tag:
+        description: 'Tag cho GitHub Release (để trống nếu không muốn tạo release)'
+        type: string
+        required: false
+        default: 'v1.0'
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    name: Build iOS IPA (Xcode)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Repository with Git LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Pull LFS Assets
+        run: |
+          git lfs pull
+
+      - name: Select Xcode Version
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Setup Apple Certificate if provided
+        id: setup_cert
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: 'build_temp_keychain'
+        run: |
+          if [ -n "$BUILD_CERTIFICATE_BASE64" ] && [ "${{ github.event.inputs.skip_signing }}" != "true" ]; then
+            echo "has_cert=true" >> $GITHUB_OUTPUT
+            echo "Importing Apple Certificate..."
+            CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+            KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+            echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-key-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+            if [ -n "$BUILD_PROVISION_PROFILE_BASE64" ]; then
+              echo "Importing Provisioning Profile..."
+              mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+              echo "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/embedded.mobileprovision"
+            fi
+          else
+            echo "has_cert=false" >> $GITHUB_OUTPUT
+            echo "Mode: Unsigned Build (No certificate or skip_signing is true)"
+          fi
+
+      - name: Build Xcode Archive
+        run: |
+          if [ "${{ steps.setup_cert.outputs.has_cert }}" = "true" ]; then
+            echo "Building with Code Signing..."
+            xcodebuild clean archive \
+              -project Unity-iPhone.xcodeproj \
+              -scheme Unity-iPhone \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath build/Unity-iPhone.xcarchive
+          else
+            echo "Building Unsigned Archive..."
+            xcodebuild clean archive \
+              -project Unity-iPhone.xcodeproj \
+              -scheme Unity-iPhone \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath build/Unity-iPhone.xcarchive \
+              CODE_SIGN_STYLE=Manual \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO
+          fi
+
+      - name: Package IPA
+        run: |
+          mkdir -p output Payload
+          APP_PATH="build/Unity-iPhone.xcarchive/Products/Applications/Unity-iPhone.app"
+          
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Error: Unity-iPhone.app not found at $APP_PATH"
+            exit 1
+          fi
+
+          echo "Copying application to Payload..."
+          cp -R "$APP_PATH" Payload/
+
+          echo "Packaging IPA..."
+          zip -r -y output/NRO_Berry_iOS.ipa Payload
+
+          echo "IPA Size:"
+          ls -lh output/NRO_Berry_iOS.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NRO_Berry_iOS_IPA
+          path: output/NRO_Berry_iOS.ipa
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output/NRO_Berry_iOS.ipa
+          tag_name: ${{ github.event.inputs.release_tag || 'v1.0' }}
+          name: "NRO Berry iOS IPA (${{ github.event.inputs.release_tag || 'v1.0' }})"
+          body: |
+            ## NRO Berry iOS IPA Release
+            - Build tự động từ GitHub Actions
+            - File IPA hỗ trợ cài đặt qua: **TrollStore, Scarlet, Sideloadly, AltStore, ESign**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
