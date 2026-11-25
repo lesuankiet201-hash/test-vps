@@ -1,0 +1,45 @@
+name: Build NTTL iOS
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/nttl-ios.yml
+      - nttl-ios-source.zip
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Extract source
+        run: unzip -q nttl-ios-source.zip
+      - name: Install dependencies
+        working-directory: nttl-ios-source/client
+        run: npm ci
+      - name: Prepare game shell
+        working-directory: nttl-ios-source/client
+        run: node shell/scripts/prepare.mjs --base base-goc
+      - name: Sync iOS
+        working-directory: nttl-ios-source/client
+        run: npx cap sync ios
+      - name: Verify configuration
+        working-directory: nttl-ios-source/client
+        run: node -e "const c=require('./ios/App/App/capacitor.config.json'); if(c.ios?.contentInset !== 'never' || c.ios?.backgroundColor !== '#000000') process.exit(1)"
+      - name: Build unsigned iOS app
+        working-directory: nttl-ios-source/client
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry App-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NTTL-iOS-unsigned
+          path: nttl-ios-source/client/App-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
